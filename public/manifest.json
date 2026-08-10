@@ -1,0 +1,10 @@
+{
+  "name": "Sonora AI",
+  "short_name": "Sonora AI",
+  "description": "AI-powered vocal production and microtonal tuning workstation.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#08080A",
+  "theme_color": "#E5C158",
+  "icons": []
+}
