@@ -8,6 +8,15 @@
 }
 
 body {
-  background-color: #08080a;
-  color: #e2e8f0;
+  background-color: #fcfcfb;
+  color: #161615;
+}
+
+.hero-sheen {
+  background: linear-gradient(135deg, #ffffff 0%, #f6f6f4 100%);
+}
+
+::selection {
+  background: #a85c1f;
+  color: #fcfcfb;
 }

@@ -19,9 +19,9 @@ export function WaveformVisualizer({ url, label }: WaveformVisualizerProps) {
 
     const wavesurfer = WaveSurfer.create({
       container: containerRef.current,
-      waveColor: "rgba(226, 232, 240, 0.35)",
-      progressColor: "#E5C158",
-      cursorColor: "#E5C158",
+      waveColor: "rgba(22, 22, 21, 0.2)",
+      progressColor: "#C9992B",
+      cursorColor: "#161615",
       height: 64,
       barWidth: 2,
       barGap: 2,
@@ -45,14 +45,14 @@ export function WaveformVisualizer({ url, label }: WaveformVisualizerProps) {
   };
 
   return (
-    <div className="rounded-xl border border-titanium/10 bg-graphite/60 p-5">
+    <div className="rounded-xl border border-line bg-white p-5 shadow-panel">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-medium text-titanium/80">{label}</span>
+        <span className="font-mono text-xs uppercase tracking-wider text-ink/50">{label}</span>
         {url && (
           <button
             type="button"
             onClick={togglePlay}
-            className="flex h-8 w-8 items-center justify-center rounded-full bg-gold text-obsidian transition hover:brightness-110"
+            className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-mustard text-white shadow-mustard transition hover:brightness-110"
             aria-label={isPlaying ? "Pause" : "Play"}
           >
             {isPlaying ? <Pause size={14} /> : <Play size={14} />}
@@ -60,7 +60,7 @@ export function WaveformVisualizer({ url, label }: WaveformVisualizerProps) {
         )}
       </div>
       <div ref={containerRef} className="mt-4 min-h-[64px]" />
-      {!url && <p className="mt-4 text-xs text-titanium/40">No audio yet</p>}
+      {!url && <p className="mt-4 text-xs text-ink/40">No audio yet</p>}
     </div>
   );
 }
