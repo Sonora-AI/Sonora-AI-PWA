@@ -1,8 +1,6 @@
 import axios from "axios";
 
-export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
-
-const client = axios.create({ baseURL: `${API_BASE_URL}/api/v1` });
+const client = axios.create({ baseURL: "/api/backend" });
 
 export type ProcessingMode = "A" | "B" | "C";
 export type JobStatus = "pending" | "processing" | "done" | "error";
@@ -12,31 +10,61 @@ export interface ProcessResponse {
   status: JobStatus;
 }
 
+export interface AutomationSummary {
+  detected_vocal_range?: string;
+  overall_dynamic_range?: string;
+  primary_emotion?: string;
+  [key: string]: unknown;
+}
+
 export interface StatusResponse {
   job_id: string;
   status: JobStatus;
+  mode: ProcessingMode;
+  error?: string | null;
+  automation_summary?: AutomationSummary | null;
+}
+
+export interface JobSummary {
+  job_id: string;
+  status: JobStatus;
+  mode: ProcessingMode;
+  created_at: number;
   error?: string | null;
 }
 
 export interface ProcessParams {
   mode: ProcessingMode;
   retuneSpeed: number;
+  genre?: string;
   vocal: Blob;
   reference?: Blob;
+  referenceYoutubeUrl?: string;
   backing?: Blob;
+  backingYoutubeUrl?: string;
+  extractInstrumental?: boolean;
 }
 
 export async function submitJob(params: ProcessParams): Promise<ProcessResponse> {
   const form = new FormData();
   form.append("mode", params.mode);
   form.append("retune_speed", String(params.retuneSpeed));
+  if (params.genre) form.append("genre", params.genre);
+  form.append("extract_instrumental", String(Boolean(params.extractInstrumental)));
   form.append("vocal", params.vocal, "vocal.webm");
   if (params.reference) form.append("reference", params.reference, "reference.webm");
+  if (params.referenceYoutubeUrl) form.append("reference_youtube_url", params.referenceYoutubeUrl);
   if (params.backing) form.append("backing", params.backing, "backing.webm");
+  if (params.backingYoutubeUrl) form.append("backing_youtube_url", params.backingYoutubeUrl);
 
   const { data } = await client.post<ProcessResponse>("/process", form, {
     headers: { "Content-Type": "multipart/form-data" },
   });
+  return data;
+}
+
+export async function listJobs(): Promise<JobSummary[]> {
+  const { data } = await client.get<JobSummary[]>("/jobs");
   return data;
 }
 
@@ -46,7 +74,7 @@ export async function getStatus(jobId: string): Promise<StatusResponse> {
 }
 
 export function getResultUrl(jobId: string): string {
-  return `${API_BASE_URL}/api/v1/result/${jobId}`;
+  return `/api/backend/result/${jobId}`;
 }
 
 export async function listStems(jobId: string): Promise<string[]> {
@@ -55,7 +83,7 @@ export async function listStems(jobId: string): Promise<string[]> {
 }
 
 export function getStemUrl(jobId: string, stemName: string): string {
-  return `${API_BASE_URL}/api/v1/stems/${jobId}/${stemName}`;
+  return `/api/backend/stems/${jobId}/${stemName}`;
 }
 
 export async function pollUntilDone(
