@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { FolderOpen } from "lucide-react";
 import { AuthHeader, useSession } from "@/components/ui/AuthHeader";
-import { listJobs, getResultUrl, type JobSummary } from "@/lib/api";
+import { listJobs, fetchResultBlobUrl, type JobSummary } from "@/lib/api";
 
 const MODE_LABEL: Record<string, string> = { A: "12-TET", B: "CONTOUR", C: "RAGA" };
 
@@ -19,6 +19,19 @@ export default function LibraryPage() {
   const isAuthenticated = session?.authenticated === true;
   const [jobs, setJobs] = useState<JobSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [playingJobId, setPlayingJobId] = useState<string | null>(null);
+
+  const handlePlay = async (jobId: string) => {
+    setPlayingJobId(jobId);
+    try {
+      const blobUrl = await fetchResultBlobUrl(jobId);
+      window.open(blobUrl, "_blank");
+    } catch {
+      setError("Failed to load audio");
+    } finally {
+      setPlayingJobId(null);
+    }
+  };
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -84,9 +97,14 @@ export default function LibraryPage() {
                     <td className="px-5 py-3 text-ink/50">{new Date(job.created_at * 1000).toLocaleString()}</td>
                     <td className="px-5 py-3">
                       {job.status === "done" ? (
-                        <a href={getResultUrl(job.job_id)} className="text-mustard hover:underline">
-                          Play
-                        </a>
+                        <button
+                          type="button"
+                          onClick={() => handlePlay(job.job_id)}
+                          disabled={playingJobId === job.job_id}
+                          className="text-mustard hover:underline disabled:opacity-50"
+                        >
+                          {playingJobId === job.job_id ? "Loading…" : "Play"}
+                        </button>
                       ) : (
                         <span className="text-ink/25">—</span>
                       )}

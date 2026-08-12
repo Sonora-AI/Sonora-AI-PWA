@@ -2,6 +2,21 @@ import axios from "axios";
 
 const client = axios.create({ baseURL: "/api/backend" });
 
+// Vercel Functions cap request/response bodies at 4.5MB, which real audio
+// files routinely exceed. Uploads and result/stem downloads therefore talk
+// to the backend directly from the browser (using a short-lived, narrowly
+// scoped ticket -- see getTicket below) instead of going through the
+// `/api/backend` proxy above, which stays on the small-JSON-only paths.
+const BACKEND_URL = process.env.NEXT_PUBLIC_BACKEND_URL ?? "";
+
+async function getTicket(scope: "upload" | "download", jobId?: string): Promise<string> {
+  const { data } = await client.post<{ ticket: string; expires_in: number }>("/tickets", {
+    scope,
+    job_id: jobId,
+  });
+  return data.ticket;
+}
+
 export type ProcessingMode = "A" | "B" | "C";
 export type JobStatus = "pending" | "processing" | "done" | "error";
 
@@ -57,10 +72,17 @@ export async function submitJob(params: ProcessParams): Promise<ProcessResponse>
   if (params.backing) form.append("backing", params.backing, "backing.webm");
   if (params.backingYoutubeUrl) form.append("backing_youtube_url", params.backingYoutubeUrl);
 
-  const { data } = await client.post<ProcessResponse>("/process", form, {
-    headers: { "Content-Type": "multipart/form-data" },
+  const ticket = await getTicket("upload");
+  const response = await fetch(`${BACKEND_URL}/api/v1/process`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${ticket}` },
+    body: form,
   });
-  return data;
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(`Upload failed (${response.status}): ${detail}`);
+  }
+  return (await response.json()) as ProcessResponse;
 }
 
 export async function listJobs(): Promise<JobSummary[]> {
@@ -73,8 +95,18 @@ export async function getStatus(jobId: string): Promise<StatusResponse> {
   return data;
 }
 
-export function getResultUrl(jobId: string): string {
-  return `/api/backend/result/${jobId}`;
+async function fetchAudioBlobUrl(path: string, jobId: string): Promise<string> {
+  const ticket = await getTicket("download", jobId);
+  const response = await fetch(`${BACKEND_URL}${path}`, {
+    headers: { Authorization: `Bearer ${ticket}` },
+  });
+  if (!response.ok) throw new Error(`Failed to fetch audio (${response.status})`);
+  const blob = await response.blob();
+  return URL.createObjectURL(blob);
+}
+
+export async function fetchResultBlobUrl(jobId: string): Promise<string> {
+  return fetchAudioBlobUrl(`/api/v1/result/${jobId}`, jobId);
 }
 
 export async function listStems(jobId: string): Promise<string[]> {
@@ -82,8 +114,8 @@ export async function listStems(jobId: string): Promise<string[]> {
   return data.stems;
 }
 
-export function getStemUrl(jobId: string, stemName: string): string {
-  return `/api/backend/stems/${jobId}/${stemName}`;
+export async function fetchStemBlobUrl(jobId: string, stemName: string): Promise<string> {
+  return fetchAudioBlobUrl(`/api/v1/stems/${jobId}/${stemName}`, jobId);
 }
 
 export async function pollUntilDone(
