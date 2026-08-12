@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
 
+// Node.js Serverless Functions on Vercel cap request bodies at ~4.5MB
+// (an AWS Lambda invocation-payload limit), which audio file uploads
+// routinely exceed. Edge Functions run outside Lambda and aren't
+// subject to that cap.
+export const runtime = "edge";
+
 const BACKEND_URL = process.env.BACKEND_URL ?? "http://localhost:8000";
 
 async function proxy(request: NextRequest, path: string[]): Promise<NextResponse> {
