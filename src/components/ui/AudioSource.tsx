@@ -54,10 +54,10 @@ export function AudioSource({ label, allowYoutube = false, onChange }: AudioSour
     }
   };
 
-  const tabs: { id: Tab; label: string; icon: typeof Mic }[] = [
+  const tabs: { id: Tab; label: string; icon: typeof Mic; beta?: boolean }[] = [
     { id: "record", label: "Record", icon: Mic },
     { id: "upload", label: "Upload", icon: UploadCloud },
-    ...(allowYoutube ? [{ id: "youtube" as Tab, label: "YouTube", icon: Youtube }] : []),
+    ...(allowYoutube ? [{ id: "youtube" as Tab, label: "YouTube", icon: Youtube, beta: true }] : []),
   ];
 
   return (
@@ -65,7 +65,7 @@ export function AudioSource({ label, allowYoutube = false, onChange }: AudioSour
       <div className="flex items-center justify-between border-b border-line px-5 py-3">
         <span className="font-mono text-xs uppercase tracking-wider text-ink/60">{label}</span>
         <div className="flex gap-1 rounded-lg bg-mist p-1">
-          {tabs.map(({ id, label: tabLabel, icon: Icon }) => (
+          {tabs.map(({ id, label: tabLabel, icon: Icon, beta }) => (
             <button
               key={id}
               type="button"
@@ -76,6 +76,11 @@ export function AudioSource({ label, allowYoutube = false, onChange }: AudioSour
             >
               <Icon size={12} strokeWidth={1.75} />
               {tabLabel}
+              {beta && (
+                <span className="rounded-sm bg-ink/10 px-1 py-0.5 font-mono text-[9px] leading-none text-ink/40">
+                  BETA
+                </span>
+              )}
             </button>
           ))}
         </div>
@@ -157,7 +162,19 @@ export function AudioSource({ label, allowYoutube = false, onChange }: AudioSour
         )}
 
         {tab === "youtube" && (
-          <div className="flex flex-col gap-2">
+          <div className="flex flex-col gap-3">
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs leading-relaxed text-amber-900">
+              <span className="font-semibold">Unreliable — experimental.</span> YouTube frequently
+              blocks server-side downloads from cloud hosts. If a job fails, use{" "}
+              <button
+                type="button"
+                onClick={() => switchTab("upload")}
+                className="underline decoration-amber-400 underline-offset-2 hover:text-amber-950"
+              >
+                Upload
+              </button>{" "}
+              instead for a reliable result.
+            </div>
             <div className="flex items-center gap-2 rounded-lg border border-line bg-mist px-3 py-2.5">
               <Youtube size={16} className="shrink-0 text-ink/40" />
               <input
