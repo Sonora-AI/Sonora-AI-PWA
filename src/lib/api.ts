@@ -88,7 +88,10 @@ export function getStemUrl(jobId: string, stemName: string): string {
 
 export async function pollUntilDone(
   jobId: string,
-  { intervalMs = 1500, timeoutMs = 5 * 60 * 1000 }: { intervalMs?: number; timeoutMs?: number } = {},
+  // The backend VM has no GPU, so Demucs/CREPE inference is CPU-bound and can
+  // legitimately take well past 5 minutes, especially on first request while
+  // model weights are still downloading.
+  { intervalMs = 1500, timeoutMs = 20 * 60 * 1000 }: { intervalMs?: number; timeoutMs?: number } = {},
 ): Promise<StatusResponse> {
   const start = Date.now();
   while (true) {
