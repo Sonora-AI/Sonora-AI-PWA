@@ -5,7 +5,7 @@ import { motion } from "framer-motion";
 import { AudioSource, type AudioSourceValue } from "@/components/ui/AudioSource";
 import { AuthHeader, useSession } from "@/components/ui/AuthHeader";
 import { WaveformVisualizer } from "@/components/ui/WaveformVisualizer";
-import { submitJob, pollUntilDone, getResultUrl, type ProcessingMode, type StatusResponse } from "@/lib/api";
+import { submitJob, pollUntilDone, fetchResultBlobUrl, type ProcessingMode, type StatusResponse } from "@/lib/api";
 
 type FlowState = "idle" | "submitting" | "processing" | "done" | "error";
 
@@ -72,7 +72,7 @@ export default function ConsolePage() {
       const finalStatus = await pollUntilDone(job_id);
       setLastStatus(finalStatus);
       if (finalStatus.status === "done") {
-        setResultUrl(getResultUrl(job_id));
+        setResultUrl(await fetchResultBlobUrl(job_id));
         setFlowState("done");
       } else {
         setErrorMessage(finalStatus.error ?? "Processing failed");

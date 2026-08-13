@@ -37,14 +37,25 @@ export function AuthHeader({ session }: { session: SessionInfo | null }) {
   );
 }
 
+const SESSION_RECHECK_MS = 60 * 1000;
+
 export function useSession(): SessionInfo | null {
   const [session, setSession] = useState<SessionInfo | null>(null);
 
   useEffect(() => {
-    fetch("/api/auth/session")
-      .then((res) => res.json())
-      .then(setSession)
-      .catch(() => setSession({ authenticated: false }));
+    const check = () => {
+      fetch("/api/auth/session")
+        .then((res) => res.json())
+        .then(setSession)
+        .catch(() => setSession({ authenticated: false }));
+    };
+    check();
+    // /api/auth/session calls getSession(), which silently refreshes an
+    // expired access token when possible -- polling here both keeps the UI
+    // honest about sign-in state and keeps the session alive in the
+    // background instead of letting it go stale mid-visit.
+    const interval = setInterval(check, SESSION_RECHECK_MS);
+    return () => clearInterval(interval);
   }, []);
 
   return session;

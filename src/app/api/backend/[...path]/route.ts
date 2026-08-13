@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/session";
 
+// Large payloads (audio upload/download) bypass this proxy entirely and
+// talk to the backend directly from the browser via a scoped ticket --
+// see lib/api.ts -- since Vercel's 4.5MB body cap applies platform-wide
+// regardless of runtime. Everything left here is small JSON, so the
+// default Node.js runtime (which lib/session.ts's crypto usage requires
+// anyway) is fine.
 const BACKEND_URL = process.env.BACKEND_URL ?? "http://localhost:8000";
 
 async function proxy(request: NextRequest, path: string[]): Promise<NextResponse> {

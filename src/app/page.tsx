@@ -1,8 +1,9 @@
 "use client";
 
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { Music2, Users, Waves, Sparkles, Youtube, UploadCloud, ArrowRight } from "lucide-react";
+import { Music2, Users, Waves, Sparkles, Youtube, UploadCloud, ArrowRight, AlertTriangle, X } from "lucide-react";
 import { useSession } from "@/components/ui/AuthHeader";
 import { Logo } from "@/components/ui/Logo";
 
@@ -34,9 +35,37 @@ const PIPELINE = [
 export default function LandingPage() {
   const session = useSession();
   const isAuthenticated = session?.authenticated === true;
+  const [authError, setAuthError] = useState<{ reason: string; description: string | null } | null>(null);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const reason = params.get("auth_error");
+    if (!reason) return;
+    setAuthError({ reason, description: params.get("auth_error_description") });
+    // Drop the params from the URL so refreshing/sharing the link doesn't re-show a stale error.
+    window.history.replaceState(null, "", window.location.pathname);
+  }, []);
 
   return (
     <div className="min-h-screen bg-paper">
+      {authError && (
+        <div className="flex items-start gap-3 border-b border-red-200 bg-red-50 px-8 py-3 text-sm text-red-700 sm:px-14">
+          <AlertTriangle size={16} className="mt-0.5 shrink-0" />
+          <div className="flex-1">
+            <span className="font-medium">Sign-in failed ({authError.reason}).</span>{" "}
+            {authError.description && <span className="text-red-600/90">{authError.description}</span>}
+          </div>
+          <button
+            type="button"
+            onClick={() => setAuthError(null)}
+            className="shrink-0 text-red-400 hover:text-red-600"
+            aria-label="Dismiss"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      )}
+
       <header className="flex items-center justify-between px-8 py-6 sm:px-14">
         <div className="flex items-center gap-3">
           <Logo size={36} />
