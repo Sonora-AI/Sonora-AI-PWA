@@ -80,6 +80,23 @@ export async function exchangeCodeForTokens(code: string, codeVerifier: string):
   return (await res.json()) as TokenSet;
 }
 
+export async function refreshAccessToken(refreshToken: string): Promise<TokenSet> {
+  const { token_endpoint } = await getDiscovery();
+  const body = new URLSearchParams({
+    grant_type: "refresh_token",
+    refresh_token: refreshToken,
+    client_id: CLIENT_ID,
+    client_secret: CLIENT_SECRET,
+  });
+  const res = await fetch(token_endpoint, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: body.toString(),
+  });
+  if (!res.ok) throw new Error(`Token refresh failed: ${res.status} ${await res.text()}`);
+  return (await res.json()) as TokenSet;
+}
+
 export function decodeIdTokenClaims(idToken: string): Record<string, unknown> {
   const payload = idToken.split(".")[1];
   const json = Buffer.from(payload.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf-8");

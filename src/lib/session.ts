@@ -1,4 +1,5 @@
 import { cookies } from "next/headers";
+import { refreshAccessToken } from "@/lib/oidc";
 
 const COOKIE_NAME = "sonora_session";
 
@@ -22,15 +23,45 @@ export async function setSession(session: Session): Promise<void> {
   });
 }
 
-export async function getSession(): Promise<Session | null> {
+// Reads the session cookie as-is, without checking whether the access
+// token has expired. Only for the logout flow: we still need the id_token
+// to properly end the Asgardeo SSO session even if our access token is stale.
+export async function getRawSession(): Promise<Session | null> {
   const jar = await cookies();
   const raw = jar.get(COOKIE_NAME)?.value;
   if (!raw) return null;
   try {
-    const session = JSON.parse(Buffer.from(raw, "base64").toString("utf-8")) as Session;
-    if (session.expires_at < Date.now()) return null;
-    return session;
+    return JSON.parse(Buffer.from(raw, "base64").toString("utf-8")) as Session;
   } catch {
+    return null;
+  }
+}
+
+export async function getSession(): Promise<Session | null> {
+  const session = await getRawSession();
+  if (!session) return null;
+  if (session.expires_at >= Date.now()) return session;
+
+  // Access token expired -- try a silent refresh instead of forcing the
+  // user to log in again every ~hour. If there's no refresh token, or the
+  // refresh itself fails (e.g. it was revoked), fall through to logged-out.
+  if (!session.refresh_token) {
+    await clearSession();
+    return null;
+  }
+  try {
+    const tokens = await refreshAccessToken(session.refresh_token);
+    const refreshed: Session = {
+      ...session,
+      access_token: tokens.access_token,
+      id_token: tokens.id_token ?? session.id_token,
+      refresh_token: tokens.refresh_token ?? session.refresh_token,
+      expires_at: Date.now() + tokens.expires_in * 1000,
+    };
+    await setSession(refreshed);
+    return refreshed;
+  } catch {
+    await clearSession();
     return null;
   }
 }
