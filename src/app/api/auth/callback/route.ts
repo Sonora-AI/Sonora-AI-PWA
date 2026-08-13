@@ -3,14 +3,22 @@ import { NextRequest, NextResponse } from "next/server";
 import { decodeIdTokenClaims, exchangeCodeForTokens, APP_BASE_URL } from "@/lib/oidc";
 import { setSession } from "@/lib/session";
 
+function errorRedirect(reason: string, description?: string): NextResponse {
+  const params = new URLSearchParams({ auth_error: reason });
+  if (description) params.set("auth_error_description", description);
+  return NextResponse.redirect(`${APP_BASE_URL}/?${params.toString()}`);
+}
+
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const code = searchParams.get("code");
   const state = searchParams.get("state");
   const error = searchParams.get("error");
+  const errorDescription = searchParams.get("error_description");
 
   if (error) {
-    return NextResponse.redirect(`${APP_BASE_URL}/?auth_error=${encodeURIComponent(error)}`);
+    console.error(`[auth/callback] Asgardeo returned an error: ${error} -- ${errorDescription}`);
+    return errorRedirect(error, errorDescription ?? undefined);
   }
 
   const jar = await cookies();
@@ -20,7 +28,11 @@ export async function GET(request: NextRequest) {
   jar.delete("pkce_verifier");
 
   if (!code || !state || !verifier || state !== expectedState) {
-    return NextResponse.redirect(`${APP_BASE_URL}/?auth_error=invalid_state`);
+    console.error(
+      `[auth/callback] invalid_state: code=${Boolean(code)} state=${Boolean(state)} ` +
+        `verifier=${Boolean(verifier)} stateMatch=${state === expectedState}`,
+    );
+    return errorRedirect("invalid_state", "Login session expired or was reused. Please try signing in again.");
   }
 
   try {
@@ -36,8 +48,11 @@ export async function GET(request: NextRequest) {
       name: String(claims.name ?? claims.given_name ?? claims.email ?? "Signed in"),
       email: String(claims.email ?? ""),
     });
-  } catch {
-    return NextResponse.redirect(`${APP_BASE_URL}/?auth_error=token_exchange_failed`);
+    console.log(`[auth/callback] signed in: sub=${claims.sub} hasRefreshToken=${Boolean(tokens.refresh_token)}`);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[auth/callback] token exchange failed: ${message}`);
+    return errorRedirect("token_exchange_failed", message);
   }
 
   return NextResponse.redirect(`${APP_BASE_URL}/console`);

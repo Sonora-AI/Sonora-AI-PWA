@@ -46,6 +46,8 @@ export async function getSession(): Promise<Session | null> {
   // user to log in again every ~hour. If there's no refresh token, or the
   // refresh itself fails (e.g. it was revoked), fall through to logged-out.
   if (!session.refresh_token) {
+    console.warn(`[session] access token expired for sub=${session.sub} and no refresh_token was issued -- ` +
+      "check that Asgardeo's app has the Refresh Token grant type enabled");
     await clearSession();
     return null;
   }
@@ -59,8 +61,11 @@ export async function getSession(): Promise<Session | null> {
       expires_at: Date.now() + tokens.expires_in * 1000,
     };
     await setSession(refreshed);
+    console.log(`[session] silently refreshed access token for sub=${session.sub}`);
     return refreshed;
-  } catch {
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[session] silent refresh failed for sub=${session.sub}: ${message}`);
     await clearSession();
     return null;
   }

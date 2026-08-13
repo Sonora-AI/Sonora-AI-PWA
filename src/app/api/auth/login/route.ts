@@ -1,6 +1,6 @@
 import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
-import { buildAuthorizeUrl, generatePkce, generateState } from "@/lib/oidc";
+import { buildAuthorizeUrl, generatePkce, generateState, REDIRECT_URI } from "@/lib/oidc";
 
 export async function GET() {
   const { verifier, challenge } = generatePkce();
@@ -11,5 +11,6 @@ export async function GET() {
   jar.set("oauth_state", state, { httpOnly: true, sameSite: "lax", path: "/api/auth", maxAge: 300 });
 
   const authorizeUrl = await buildAuthorizeUrl(state, challenge);
+  console.log(`[auth/login] redirecting to Asgardeo: redirect_uri=${REDIRECT_URI} state=${state}`);
   return NextResponse.redirect(authorizeUrl);
 }

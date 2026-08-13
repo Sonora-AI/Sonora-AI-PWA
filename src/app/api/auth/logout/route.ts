@@ -13,9 +13,11 @@ export async function GET() {
   await clearSession();
 
   if (!session?.id_token) {
+    console.log("[auth/logout] no local session found -- clearing cookie and redirecting home without Asgardeo");
     return NextResponse.redirect(APP_BASE_URL);
   }
 
   const logoutUrl = await buildLogoutUrl(session.id_token);
+  console.log(`[auth/logout] ending Asgardeo SSO session for sub=${session.sub}`);
   return NextResponse.redirect(logoutUrl);
 }
