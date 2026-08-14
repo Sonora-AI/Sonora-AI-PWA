@@ -34,6 +34,7 @@ export default function ConsolePage() {
   const [resultUrl, setResultUrl] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [lastStatus, setLastStatus] = useState<StatusResponse | null>(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
 
   const needsReference = mode === "B";
   const needsBacking = mode === "C";
@@ -56,18 +57,22 @@ export default function ConsolePage() {
     setErrorMessage(null);
     setResultUrl(null);
     setLastStatus(null);
+    setUploadProgress(0);
     try {
-      const { job_id } = await submitJob({
-        mode,
-        retuneSpeed,
-        genre,
-        extractInstrumental,
-        vocal: vocalSource.blob,
-        reference: referenceSource.kind === "blob" ? referenceSource.blob : undefined,
-        referenceYoutubeUrl: referenceSource.kind === "youtube" ? referenceSource.url : undefined,
-        backing: backingSource.kind === "blob" ? backingSource.blob : undefined,
-        backingYoutubeUrl: backingSource.kind === "youtube" ? backingSource.url : undefined,
-      });
+      const { job_id } = await submitJob(
+        {
+          mode,
+          retuneSpeed,
+          genre,
+          extractInstrumental,
+          vocal: vocalSource.blob,
+          reference: referenceSource.kind === "blob" ? referenceSource.blob : undefined,
+          referenceYoutubeUrl: referenceSource.kind === "youtube" ? referenceSource.url : undefined,
+          backing: backingSource.kind === "blob" ? backingSource.blob : undefined,
+          backingYoutubeUrl: backingSource.kind === "youtube" ? backingSource.url : undefined,
+        },
+        setUploadProgress,
+      );
       setFlowState("processing");
       const finalStatus = await pollUntilDone(job_id);
       setLastStatus(finalStatus);
@@ -201,11 +206,19 @@ export default function ConsolePage() {
                 type="button"
                 onClick={handleSubmit}
                 disabled={!canSubmit}
-                className="rounded-lg bg-gradient-mustard py-3 text-sm font-semibold uppercase tracking-wide text-white shadow-mustard transition disabled:cursor-not-allowed disabled:opacity-30 hover:enabled:brightness-110"
+                className="relative overflow-hidden rounded-lg bg-gradient-mustard py-3 text-sm font-semibold uppercase tracking-wide text-white shadow-mustard transition disabled:cursor-not-allowed disabled:opacity-30 hover:enabled:brightness-110"
               >
-                {flowState === "submitting" && "Uploading..."}
-                {flowState === "processing" && "Processing..."}
-                {(flowState === "idle" || flowState === "done" || flowState === "error") && "Initialize Session"}
+                {flowState === "submitting" && (
+                  <span
+                    className="absolute inset-y-0 left-0 bg-white/20 transition-[width]"
+                    style={{ width: `${Math.round(uploadProgress * 100)}%` }}
+                  />
+                )}
+                <span className="relative">
+                  {flowState === "submitting" && `Uploading... ${Math.round(uploadProgress * 100)}%`}
+                  {flowState === "processing" && "Processing..."}
+                  {(flowState === "idle" || flowState === "done" || flowState === "error") && "Initialize Session"}
+                </span>
               </button>
             ) : (
               <a
@@ -235,7 +248,10 @@ export default function ConsolePage() {
               <div className="mt-4 flex flex-col gap-3 font-mono text-xs">
                 <div className="flex items-center justify-between">
                   <span className="text-ink/50">STATUS</span>
-                  <span className="text-ink">{flowState.toUpperCase()}</span>
+                  <span className="text-ink">
+                    {flowState.toUpperCase()}
+                    {flowState === "submitting" && ` · ${Math.round(uploadProgress * 100)}%`}
+                  </span>
                 </div>
                 {lastStatus?.automation_summary ? (
                   <>

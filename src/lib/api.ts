@@ -60,7 +60,40 @@ export interface ProcessParams {
   extractInstrumental?: boolean;
 }
 
-export async function submitJob(params: ProcessParams): Promise<ProcessResponse> {
+// fetch() has no upload-progress event and no per-attempt timeout, so a
+// large multipart upload over a slow/lossy connection just hangs with zero
+// feedback (this is exactly what happened over a high-latency, lossy path:
+// TCP congestion control collapsed the connection to ~80Kbps and the UI sat
+// on "Uploading..." indefinitely with no way to tell a crawling transfer
+// from a dead one). XMLHttpRequest gives us both.
+function uploadWithProgress(
+  url: string,
+  form: FormData,
+  ticket: string,
+  { timeoutMs, onProgress }: { timeoutMs: number; onProgress?: (fraction: number) => void },
+): Promise<{ status: number; body: string }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    xhr.setRequestHeader("Authorization", `Bearer ${ticket}`);
+    xhr.timeout = timeoutMs;
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable) onProgress?.(event.loaded / event.total);
+    };
+    xhr.onload = () => resolve({ status: xhr.status, body: xhr.responseText });
+    xhr.onerror = () => reject(new Error("Network error during upload"));
+    xhr.ontimeout = () => reject(new Error(`Upload timed out after ${Math.round(timeoutMs / 1000)}s`));
+    xhr.send(form);
+  });
+}
+
+const UPLOAD_TIMEOUT_MS = 4 * 60 * 1000;
+const MAX_UPLOAD_ATTEMPTS = 3;
+
+export async function submitJob(
+  params: ProcessParams,
+  onProgress?: (fraction: number) => void,
+): Promise<ProcessResponse> {
   const form = new FormData();
   form.append("mode", params.mode);
   form.append("retune_speed", String(params.retuneSpeed));
@@ -72,17 +105,38 @@ export async function submitJob(params: ProcessParams): Promise<ProcessResponse>
   if (params.backing) form.append("backing", params.backing, "backing.webm");
   if (params.backingYoutubeUrl) form.append("backing_youtube_url", params.backingYoutubeUrl);
 
-  const ticket = await getTicket("upload");
-  const response = await fetch(`${BACKEND_URL}/api/v1/process`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${ticket}` },
-    body: form,
-  });
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(`Upload failed (${response.status}): ${detail}`);
+  for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
+    // Fetch a fresh ticket per attempt rather than reusing one across
+    // retries -- cheap, and sidesteps any edge case around a ticket expiring
+    // mid-retry after a timed-out prior attempt.
+    const ticket = await getTicket("upload");
+    const isLastAttempt = attempt === MAX_UPLOAD_ATTEMPTS;
+
+    let result: { status: number; body: string };
+    try {
+      result = await uploadWithProgress(`${BACKEND_URL}/api/v1/process`, form, ticket, {
+        timeoutMs: UPLOAD_TIMEOUT_MS,
+        onProgress,
+      });
+    } catch (err) {
+      // Network error or timeout -- transient, worth retrying.
+      if (isLastAttempt) throw err;
+      onProgress?.(0);
+      await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+      continue;
+    }
+
+    if (result.status >= 200 && result.status < 300) return JSON.parse(result.body) as ProcessResponse;
+    if (result.status >= 400 && result.status < 500) {
+      // Client error (bad auth, bad request, payload too large) -- retrying won't help.
+      throw new Error(`Upload failed (${result.status}): ${result.body}`);
+    }
+    // 5xx -- treat as transient and retry.
+    if (isLastAttempt) throw new Error(`Upload failed (${result.status}): ${result.body}`);
+    onProgress?.(0);
+    await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
   }
-  return (await response.json()) as ProcessResponse;
+  throw new Error("Upload failed after retries");
 }
 
 export async function listJobs(): Promise<JobSummary[]> {
