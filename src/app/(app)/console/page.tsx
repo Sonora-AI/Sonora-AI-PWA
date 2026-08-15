@@ -74,7 +74,7 @@ export default function ConsolePage() {
         setUploadProgress,
       );
       setFlowState("processing");
-      const finalStatus = await pollUntilDone(job_id);
+      const finalStatus = await pollUntilDone(job_id, { onStatus: setLastStatus });
       setLastStatus(finalStatus);
       if (finalStatus.status === "done") {
         setResultUrl(await fetchResultBlobUrl(job_id));
@@ -216,7 +216,7 @@ export default function ConsolePage() {
                 )}
                 <span className="relative">
                   {flowState === "submitting" && `Uploading... ${Math.round(uploadProgress * 100)}%`}
-                  {flowState === "processing" && "Processing..."}
+                  {flowState === "processing" && (lastStatus?.progress || "Processing...")}
                   {(flowState === "idle" || flowState === "done" || flowState === "error") && "Initialize Session"}
                 </span>
               </button>
@@ -251,6 +251,7 @@ export default function ConsolePage() {
                   <span className="text-ink">
                     {flowState.toUpperCase()}
                     {flowState === "submitting" && ` · ${Math.round(uploadProgress * 100)}%`}
+                    {flowState === "processing" && lastStatus?.progress && ` · ${lastStatus.progress}`}
                   </span>
                 </div>
                 {lastStatus?.automation_summary ? (

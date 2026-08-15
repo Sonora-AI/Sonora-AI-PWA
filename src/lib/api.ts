@@ -36,6 +36,7 @@ export interface StatusResponse {
   job_id: string;
   status: JobStatus;
   mode: ProcessingMode;
+  progress?: string;
   error?: string | null;
   automation_summary?: AutomationSummary | null;
 }
@@ -174,14 +175,20 @@ export async function fetchStemBlobUrl(jobId: string, stemName: string): Promise
 
 export async function pollUntilDone(
   jobId: string,
-  // The backend VM has no GPU, so Demucs/CREPE inference is CPU-bound and can
-  // legitimately take well past 5 minutes, especially on first request while
-  // model weights are still downloading.
-  { intervalMs = 1500, timeoutMs = 20 * 60 * 1000 }: { intervalMs?: number; timeoutMs?: number } = {},
+  // The backend VM has no GPU, so Demucs/CREPE inference is CPU-bound --
+  // observed real-world completion times run 25-30+ minutes even for small
+  // files, so this needs real headroom above that, not just above the
+  // model-download-on-first-request case.
+  {
+    intervalMs = 1500,
+    timeoutMs = 45 * 60 * 1000,
+    onStatus,
+  }: { intervalMs?: number; timeoutMs?: number; onStatus?: (status: StatusResponse) => void } = {},
 ): Promise<StatusResponse> {
   const start = Date.now();
   while (true) {
     const status = await getStatus(jobId);
+    onStatus?.(status);
     if (status.status === "done" || status.status === "error") return status;
     if (Date.now() - start > timeoutMs) throw new Error(`Job ${jobId} timed out while polling`);
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
