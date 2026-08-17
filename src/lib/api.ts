@@ -17,8 +17,8 @@ async function getTicket(scope: "upload" | "download", jobId?: string): Promise<
   return data.ticket;
 }
 
-export type ProcessingMode = "A" | "B" | "C";
-export type JobStatus = "pending" | "processing" | "done" | "error";
+export type ProcessingMode = "A" | "B" | "C" | "COVER";
+export type JobStatus = "pending" | "processing" | "awaiting_review" | "done" | "error";
 
 export interface ProcessResponse {
   job_id: string;
@@ -39,6 +39,9 @@ export interface StatusResponse {
   progress?: string;
   error?: string | null;
   automation_summary?: AutomationSummary | null;
+  piano_backing_status?: JobStatus | null;
+  piano_backing_progress?: string;
+  piano_backing_error?: string | null;
 }
 
 export interface JobSummary {
@@ -59,6 +62,36 @@ export interface ProcessParams {
   backing?: Blob;
   backingYoutubeUrl?: string;
   extractInstrumental?: boolean;
+  enableReview?: boolean;
+  denoiseStrength?: number;
+}
+
+export interface RemixParams {
+  offsetSeconds: number;
+  vocalGainDb: number;
+  backingGainDb: number;
+  usePiano: boolean;
+}
+
+export interface ReviewNote {
+  index: number;
+  start_sec: number;
+  end_sec: number;
+  perceived_pitch_hz: number;
+  target_hz: number;
+}
+
+export interface ReviewPayload {
+  job_id: string;
+  contour_times: number[];
+  contour_frequency: number[];
+  notes: ReviewNote[];
+}
+
+export interface NoteEdit {
+  note_index: number;
+  target_hz: number;
+  skip: boolean;
 }
 
 // fetch() has no upload-progress event and no per-attempt timeout, so a
@@ -100,6 +133,8 @@ export async function submitJob(
   form.append("retune_speed", String(params.retuneSpeed));
   if (params.genre) form.append("genre", params.genre);
   form.append("extract_instrumental", String(Boolean(params.extractInstrumental)));
+  form.append("enable_review", String(Boolean(params.enableReview)));
+  if (params.denoiseStrength !== undefined) form.append("denoise_strength", String(params.denoiseStrength));
   form.append("vocal", params.vocal, "vocal.webm");
   if (params.reference) form.append("reference", params.reference, "reference.webm");
   if (params.referenceYoutubeUrl) form.append("reference_youtube_url", params.referenceYoutubeUrl);
@@ -173,8 +208,9 @@ export async function fetchStemBlobUrl(jobId: string, stemName: string): Promise
   return fetchAudioBlobUrl(`/api/v1/stems/${jobId}/${stemName}`, jobId);
 }
 
-export async function pollUntilDone(
+export async function pollUntil(
   jobId: string,
+  isSettled: (status: StatusResponse) => boolean,
   // The backend VM has no GPU, so Demucs/CREPE inference is CPU-bound --
   // observed real-world completion times run 25-30+ minutes even for small
   // files, so this needs real headroom above that, not just above the
@@ -189,8 +225,64 @@ export async function pollUntilDone(
   while (true) {
     const status = await getStatus(jobId);
     onStatus?.(status);
-    if (status.status === "done" || status.status === "error") return status;
+    if (isSettled(status)) return status;
     if (Date.now() - start > timeoutMs) throw new Error(`Job ${jobId} timed out while polling`);
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }
+}
+
+export async function pollUntilDone(
+  jobId: string,
+  opts: { intervalMs?: number; timeoutMs?: number; onStatus?: (status: StatusResponse) => void } = {},
+): Promise<StatusResponse> {
+  return pollUntil(jobId, (status) => status.status === "done" || status.status === "error", opts);
+}
+
+export async function pollUntilPianoBackingDone(
+  jobId: string,
+  opts: { intervalMs?: number; timeoutMs?: number; onStatus?: (status: StatusResponse) => void } = {},
+): Promise<StatusResponse> {
+  return pollUntil(
+    jobId,
+    (status) => status.piano_backing_status === "done" || status.piano_backing_status === "error",
+    opts,
+  );
+}
+
+export async function submitPianoBacking(
+  jobId: string,
+  includeMelody = false,
+): Promise<{ job_id: string; piano_backing_status: JobStatus }> {
+  const { data } = await client.post<{ job_id: string; piano_backing_status: JobStatus }>(
+    `/cover/${jobId}/piano-backing`,
+    null,
+    { params: { include_melody: includeMelody } },
+  );
+  return data;
+}
+
+export async function getReviewPayload(jobId: string): Promise<ReviewPayload> {
+  const { data } = await client.get<ReviewPayload>(`/review/${jobId}`);
+  return data;
+}
+
+export async function confirmReview(
+  jobId: string,
+  edits: NoteEdit[],
+): Promise<{ job_id: string; status: JobStatus }> {
+  const { data } = await client.post<{ job_id: string; status: JobStatus }>(`/review/${jobId}/confirm`, { edits });
+  return data;
+}
+
+export async function remixCover(
+  jobId: string,
+  params: RemixParams,
+): Promise<{ job_id: string; status: JobStatus }> {
+  const { data } = await client.post<{ job_id: string; status: JobStatus }>(`/cover/${jobId}/remix`, {
+    offset_seconds: params.offsetSeconds,
+    vocal_gain_db: params.vocalGainDb,
+    backing_gain_db: params.backingGainDb,
+    use_piano: params.usePiano,
+  });
+  return data;
 }

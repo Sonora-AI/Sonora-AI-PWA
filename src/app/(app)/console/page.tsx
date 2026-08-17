@@ -4,15 +4,32 @@ import { useState } from "react";
 import { motion } from "framer-motion";
 import { AudioSource, type AudioSourceValue } from "@/components/ui/AudioSource";
 import { AuthHeader, useSession } from "@/components/ui/AuthHeader";
+import { PitchReviewCanvas } from "@/components/ui/PitchReviewCanvas";
 import { WaveformVisualizer } from "@/components/ui/WaveformVisualizer";
-import { submitJob, pollUntilDone, fetchResultBlobUrl, type ProcessingMode, type StatusResponse } from "@/lib/api";
+import {
+  submitJob,
+  pollUntil,
+  pollUntilDone,
+  pollUntilPianoBackingDone,
+  fetchResultBlobUrl,
+  fetchStemBlobUrl,
+  getReviewPayload,
+  confirmReview,
+  submitPianoBacking,
+  remixCover,
+  type NoteEdit,
+  type ProcessingMode,
+  type ReviewPayload,
+  type StatusResponse,
+} from "@/lib/api";
 
-type FlowState = "idle" | "submitting" | "processing" | "done" | "error";
+type FlowState = "idle" | "submitting" | "processing" | "reviewing" | "done" | "error";
 
 const MODE_TABS: { mode: ProcessingMode; label: string; description: string }[] = [
   { mode: "A", label: "12-TET", description: "Snap to the standard equal-tempered grid." },
   { mode: "B", label: "CONTOUR", description: "Follow a reference vocal's melodic contour." },
   { mode: "C", label: "RAGA", description: "Detect the backing track's scale, glide-aware." },
+  { mode: "COVER", label: "COVER", description: "Cover a full song: align to it, correct, and mix over its instrumental." },
 ];
 
 const emptySource: AudioSourceValue = { kind: "empty" };
@@ -25,6 +42,8 @@ export default function ConsolePage() {
   const [retuneSpeed, setRetuneSpeed] = useState(0.35);
   const [genre, setGenre] = useState("pop");
   const [extractInstrumental, setExtractInstrumental] = useState(false);
+  const [enableReview, setEnableReview] = useState(false);
+  const [denoiseStrength, setDenoiseStrength] = useState(0.4);
 
   const [vocalSource, setVocalSource] = useState<AudioSourceValue>(emptySource);
   const [referenceSource, setReferenceSource] = useState<AudioSourceValue>(emptySource);
@@ -35,9 +54,23 @@ export default function ConsolePage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [lastStatus, setLastStatus] = useState<StatusResponse | null>(null);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [jobId, setJobId] = useState<string | null>(null);
+  const [reviewPayload, setReviewPayload] = useState<ReviewPayload | null>(null);
+  const [confirmingReview, setConfirmingReview] = useState(false);
+  const [pianoUrl, setPianoUrl] = useState<string | null>(null);
+  const [generatingPiano, setGeneratingPiano] = useState(false);
+  const [pianoError, setPianoError] = useState<string | null>(null);
 
-  const needsReference = mode === "B";
+  const [remixOffset, setRemixOffset] = useState(0);
+  const [remixVocalGainDb, setRemixVocalGainDb] = useState(0);
+  const [remixBackingGainDb, setRemixBackingGainDb] = useState(0);
+  const [remixUsePiano, setRemixUsePiano] = useState(false);
+  const [remixing, setRemixing] = useState(false);
+  const [remixError, setRemixError] = useState<string | null>(null);
+
+  const needsReference = mode === "B" || mode === "COVER";
   const needsBacking = mode === "C";
+  const isCover = mode === "COVER";
 
   const hasVocal = vocalSource.kind !== "empty";
   const hasReference = referenceSource.kind !== "empty";
@@ -49,7 +82,8 @@ export default function ConsolePage() {
     (!needsReference || hasReference) &&
     (!needsBacking || hasBacking) &&
     flowState !== "submitting" &&
-    flowState !== "processing";
+    flowState !== "processing" &&
+    flowState !== "reviewing";
 
   const handleSubmit = async () => {
     if (vocalSource.kind !== "blob") return;
@@ -57,7 +91,15 @@ export default function ConsolePage() {
     setErrorMessage(null);
     setResultUrl(null);
     setLastStatus(null);
+    setReviewPayload(null);
     setUploadProgress(0);
+    setPianoUrl(null);
+    setPianoError(null);
+    setRemixError(null);
+    setRemixOffset(0);
+    setRemixVocalGainDb(0);
+    setRemixBackingGainDb(0);
+    setRemixUsePiano(false);
     try {
       const { job_id } = await submitJob(
         {
@@ -65,6 +107,8 @@ export default function ConsolePage() {
           retuneSpeed,
           genre,
           extractInstrumental,
+          enableReview,
+          denoiseStrength,
           vocal: vocalSource.blob,
           reference: referenceSource.kind === "blob" ? referenceSource.blob : undefined,
           referenceYoutubeUrl: referenceSource.kind === "youtube" ? referenceSource.url : undefined,
@@ -73,11 +117,41 @@ export default function ConsolePage() {
         },
         setUploadProgress,
       );
+      setJobId(job_id);
       setFlowState("processing");
-      const finalStatus = await pollUntilDone(job_id, { onStatus: setLastStatus });
+      const status = await pollUntil(
+        job_id,
+        (s) => s.status === "awaiting_review" || s.status === "done" || s.status === "error",
+        { onStatus: setLastStatus },
+      );
+      setLastStatus(status);
+      if (status.status === "awaiting_review") {
+        setReviewPayload(await getReviewPayload(job_id));
+        setFlowState("reviewing");
+      } else if (status.status === "done") {
+        setResultUrl(await fetchResultBlobUrl(job_id));
+        setFlowState("done");
+      } else {
+        setErrorMessage(status.error ?? "Processing failed");
+        setFlowState("error");
+      }
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "Something went wrong");
+      setFlowState("error");
+    }
+  };
+
+  const handleConfirmReview = async (edits: NoteEdit[]) => {
+    if (!jobId) return;
+    setConfirmingReview(true);
+    setErrorMessage(null);
+    try {
+      await confirmReview(jobId, edits);
+      setFlowState("processing");
+      const finalStatus = await pollUntilDone(jobId, { onStatus: setLastStatus });
       setLastStatus(finalStatus);
       if (finalStatus.status === "done") {
-        setResultUrl(await fetchResultBlobUrl(job_id));
+        setResultUrl(await fetchResultBlobUrl(jobId));
         setFlowState("done");
       } else {
         setErrorMessage(finalStatus.error ?? "Processing failed");
@@ -86,6 +160,51 @@ export default function ConsolePage() {
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : "Something went wrong");
       setFlowState("error");
+    } finally {
+      setConfirmingReview(false);
+    }
+  };
+
+  const handleGeneratePiano = async () => {
+    if (!jobId) return;
+    setGeneratingPiano(true);
+    setPianoError(null);
+    try {
+      await submitPianoBacking(jobId);
+      const finalStatus = await pollUntilPianoBackingDone(jobId);
+      if (finalStatus.piano_backing_status === "done") {
+        setPianoUrl(await fetchStemBlobUrl(jobId, "piano_backing"));
+      } else {
+        setPianoError(finalStatus.piano_backing_error ?? "Piano backing generation failed");
+      }
+    } catch (err) {
+      setPianoError(err instanceof Error ? err.message : "Failed to generate piano version");
+    } finally {
+      setGeneratingPiano(false);
+    }
+  };
+
+  const handleApplyRemix = async () => {
+    if (!jobId) return;
+    setRemixing(true);
+    setRemixError(null);
+    try {
+      await remixCover(jobId, {
+        offsetSeconds: remixOffset,
+        vocalGainDb: remixVocalGainDb,
+        backingGainDb: remixBackingGainDb,
+        usePiano: remixUsePiano,
+      });
+      const finalStatus = await pollUntilDone(jobId, { onStatus: setLastStatus });
+      if (finalStatus.status === "done") {
+        setResultUrl(await fetchResultBlobUrl(jobId));
+      } else {
+        setRemixError(finalStatus.error ?? "Remix failed");
+      }
+    } catch (err) {
+      setRemixError(err instanceof Error ? err.message : "Failed to apply remix");
+    } finally {
+      setRemixing(false);
     }
   };
 
@@ -179,11 +298,140 @@ export default function ConsolePage() {
                     className="w-32 rounded-md border border-line bg-mist px-2 py-1 text-xs text-ink outline-none focus:border-mustard"
                   />
                 </div>
+
+                <label className="mt-4 flex items-center gap-2 border-t border-line pt-4 text-xs text-ink/50">
+                  <input
+                    type="checkbox"
+                    checked={enableReview}
+                    onChange={(e) => setEnableReview(e.target.checked)}
+                    className="accent-mustard"
+                  />
+                  Review detected notes before finalizing
+                </label>
+              </div>
+            </div>
+
+            <div>
+              <span className="mb-2 block font-mono text-xs uppercase tracking-wider text-ink/50">Mastering</span>
+              <div className="rounded-xl border border-line bg-white p-5 shadow-panel">
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-[10px] uppercase tracking-wider text-ink/45">
+                    Noise Reduction
+                  </span>
+                  <span className="font-mono text-xs text-mustard">{denoiseStrength.toFixed(2)}</span>
+                </div>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={denoiseStrength}
+                  onChange={(e) => setDenoiseStrength(Number(e.target.value))}
+                  className="mt-2 w-full accent-mustard"
+                />
+                <p className="mt-1 text-[11px] text-ink/40">
+                  Strips background hiss/room noise. Higher values remove more noise but can dull the vocal — 0
+                  disables it.
+                </p>
+
+                {isCover && flowState === "done" && (
+                  <div className="mt-5 flex flex-col gap-4 border-t border-line pt-4">
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <span className="font-mono text-[10px] uppercase tracking-wider text-ink/45">
+                          Backing Track Offset
+                        </span>
+                        <span className="font-mono text-xs text-mustard">{remixOffset.toFixed(2)}s</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={-5}
+                        max={5}
+                        step={0.05}
+                        value={remixOffset}
+                        onChange={(e) => setRemixOffset(Number(e.target.value))}
+                        className="mt-2 w-full accent-mustard"
+                      />
+                      <p className="mt-1 text-[11px] text-ink/40">
+                        Manually nudge the backing track's alignment to your voice if the automatic sync is off.
+                        Negative = backing starts earlier, positive = later.
+                      </p>
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <span className="font-mono text-[10px] uppercase tracking-wider text-ink/45">
+                          Vocal Volume
+                        </span>
+                        <span className="font-mono text-xs text-mustard">
+                          {remixVocalGainDb > 0 ? "+" : ""}
+                          {remixVocalGainDb.toFixed(1)} dB
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min={-24}
+                        max={24}
+                        step={0.5}
+                        value={remixVocalGainDb}
+                        onChange={(e) => setRemixVocalGainDb(Number(e.target.value))}
+                        className="mt-2 w-full accent-mustard"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <span className="font-mono text-[10px] uppercase tracking-wider text-ink/45">
+                          {remixUsePiano ? "Piano Volume" : "Backing Volume"}
+                        </span>
+                        <span className="font-mono text-xs text-mustard">
+                          {remixBackingGainDb > 0 ? "+" : ""}
+                          {remixBackingGainDb.toFixed(1)} dB
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min={-24}
+                        max={24}
+                        step={0.5}
+                        value={remixBackingGainDb}
+                        onChange={(e) => setRemixBackingGainDb(Number(e.target.value))}
+                        className="mt-2 w-full accent-mustard"
+                      />
+                    </div>
+
+                    <label className="flex items-center gap-2 text-xs text-ink/50">
+                      <input
+                        type="checkbox"
+                        checked={remixUsePiano}
+                        onChange={(e) => setRemixUsePiano(e.target.checked)}
+                        disabled={!pianoUrl}
+                        className="accent-mustard"
+                      />
+                      Mix against the piano version instead of the original instrumental
+                      {!pianoUrl && " (generate it below first)"}
+                    </label>
+
+                    <button
+                      type="button"
+                      onClick={handleApplyRemix}
+                      disabled={remixing}
+                      className="rounded-lg bg-gradient-mustard px-4 py-2 text-xs font-semibold uppercase tracking-wide text-white shadow-mustard transition disabled:cursor-not-allowed disabled:opacity-40 hover:enabled:brightness-110"
+                    >
+                      {remixing ? "Remixing..." : "Apply Remix"}
+                    </button>
+                    {remixError && <p className="text-xs text-red-500">{remixError}</p>}
+                  </div>
+                )}
               </div>
             </div>
 
             {needsReference && (
-              <AudioSource label="Reference vocal" allowYoutube onChange={setReferenceSource} />
+              <AudioSource
+                label={isCover ? "Song to cover (full mix, with vocals)" : "Reference vocal"}
+                allowYoutube
+                onChange={setReferenceSource}
+              />
             )}
 
             {needsBacking && (
@@ -217,6 +465,7 @@ export default function ConsolePage() {
                 <span className="relative">
                   {flowState === "submitting" && `Uploading... ${Math.round(uploadProgress * 100)}%`}
                   {flowState === "processing" && (lastStatus?.progress || "Processing...")}
+                  {flowState === "reviewing" && "Awaiting your review..."}
                   {(flowState === "idle" || flowState === "done" || flowState === "error") && "Initialize Session"}
                 </span>
               </button>
@@ -238,10 +487,44 @@ export default function ConsolePage() {
             transition={{ duration: 0.35, delay: 0.1 }}
             className="flex flex-col gap-6"
           >
-            <div>
-              <span className="mb-2 block font-mono text-xs uppercase tracking-wider text-ink/50">Result</span>
-              <WaveformVisualizer url={resultUrl} label="Result" />
-            </div>
+            {flowState === "reviewing" && reviewPayload ? (
+              <PitchReviewCanvas payload={reviewPayload} onConfirm={handleConfirmReview} confirming={confirmingReview} />
+            ) : (
+              <div className="flex flex-col gap-4">
+                <div>
+                  <span className="mb-2 block font-mono text-xs uppercase tracking-wider text-ink/50">
+                    {isCover && flowState === "done" ? "Output A · Original Instrumental" : "Result"}
+                  </span>
+                  <WaveformVisualizer url={resultUrl} label="Result" downloadFileName="sonora-result.wav" />
+                </div>
+
+                {isCover && flowState === "done" && (
+                  <div>
+                    <span className="mb-2 block font-mono text-xs uppercase tracking-wider text-ink/50">
+                      Output B · Piano Backing
+                    </span>
+                    {pianoUrl ? (
+                      <WaveformVisualizer url={pianoUrl} label="Piano Version" downloadFileName="sonora-piano-backing.wav" />
+                    ) : (
+                      <div className="rounded-xl border border-line bg-white p-5 shadow-panel">
+                        <p className="text-xs text-ink/45">
+                          Swap the extracted instrumental for a Gemini-generated piano arrangement of the same song.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={handleGeneratePiano}
+                          disabled={generatingPiano}
+                          className="mt-3 rounded-lg bg-gradient-mustard px-4 py-2 text-xs font-semibold uppercase tracking-wide text-white shadow-mustard transition disabled:cursor-not-allowed disabled:opacity-40 hover:enabled:brightness-110"
+                        >
+                          {generatingPiano ? "Generating..." : "Generate Piano Version"}
+                        </button>
+                        {pianoError && <p className="mt-2 text-xs text-red-500">{pianoError}</p>}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
             <div className="rounded-xl border border-line bg-white p-5 shadow-panel">
               <span className="font-mono text-xs uppercase tracking-wider text-ink/50">Session Diagnostics</span>

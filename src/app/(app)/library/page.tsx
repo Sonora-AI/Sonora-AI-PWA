@@ -3,9 +3,16 @@
 import { useEffect, useState } from "react";
 import { FolderOpen } from "lucide-react";
 import { AuthHeader, useSession } from "@/components/ui/AuthHeader";
-import { listJobs, fetchResultBlobUrl, type JobSummary } from "@/lib/api";
+import {
+  listJobs,
+  fetchResultBlobUrl,
+  fetchStemBlobUrl,
+  submitPianoBacking,
+  pollUntilPianoBackingDone,
+  type JobSummary,
+} from "@/lib/api";
 
-const MODE_LABEL: Record<string, string> = { A: "12-TET", B: "CONTOUR", C: "RAGA" };
+const MODE_LABEL: Record<string, string> = { A: "12-TET", B: "CONTOUR", C: "RAGA", COVER: "COVER" };
 
 const STATUS_STYLE: Record<string, string> = {
   done: "bg-green-50 text-green-700 border-green-200",
@@ -20,11 +27,42 @@ export default function LibraryPage() {
   const [jobs, setJobs] = useState<JobSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [playingJobId, setPlayingJobId] = useState<string | null>(null);
+  const [pianoJobId, setPianoJobId] = useState<string | null>(null);
+  const [pianoDoneJobIds, setPianoDoneJobIds] = useState<Set<string>>(new Set());
 
   const handlePlay = async (jobId: string) => {
     setPlayingJobId(jobId);
     try {
       const blobUrl = await fetchResultBlobUrl(jobId);
+      window.open(blobUrl, "_blank");
+    } catch {
+      setError("Failed to load audio");
+    } finally {
+      setPlayingJobId(null);
+    }
+  };
+
+  const handleGeneratePiano = async (jobId: string) => {
+    setPianoJobId(jobId);
+    try {
+      await submitPianoBacking(jobId);
+      const finalStatus = await pollUntilPianoBackingDone(jobId);
+      if (finalStatus.piano_backing_status === "done") {
+        setPianoDoneJobIds((prev) => new Set(prev).add(jobId));
+      } else {
+        setError(finalStatus.piano_backing_error ?? "Piano backing generation failed");
+      }
+    } catch {
+      setError("Failed to generate piano version");
+    } finally {
+      setPianoJobId(null);
+    }
+  };
+
+  const handlePlayPiano = async (jobId: string) => {
+    setPlayingJobId(jobId);
+    try {
+      const blobUrl = await fetchStemBlobUrl(jobId, "piano_backing");
       window.open(blobUrl, "_blank");
     } catch {
       setError("Failed to load audio");
@@ -97,14 +135,36 @@ export default function LibraryPage() {
                     <td className="px-5 py-3 text-ink/50">{new Date(job.created_at * 1000).toLocaleString()}</td>
                     <td className="px-5 py-3">
                       {job.status === "done" ? (
-                        <button
-                          type="button"
-                          onClick={() => handlePlay(job.job_id)}
-                          disabled={playingJobId === job.job_id}
-                          className="text-mustard hover:underline disabled:opacity-50"
-                        >
-                          {playingJobId === job.job_id ? "Loading…" : "Play"}
-                        </button>
+                        <div className="flex items-center gap-3">
+                          <button
+                            type="button"
+                            onClick={() => handlePlay(job.job_id)}
+                            disabled={playingJobId === job.job_id}
+                            className="text-mustard hover:underline disabled:opacity-50"
+                          >
+                            {playingJobId === job.job_id ? "Loading…" : "Play"}
+                          </button>
+                          {job.mode === "COVER" &&
+                            (pianoDoneJobIds.has(job.job_id) ? (
+                              <button
+                                type="button"
+                                onClick={() => handlePlayPiano(job.job_id)}
+                                disabled={playingJobId === job.job_id}
+                                className="text-mustard hover:underline disabled:opacity-50"
+                              >
+                                {playingJobId === job.job_id ? "Loading…" : "Play Piano"}
+                              </button>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleGeneratePiano(job.job_id)}
+                                disabled={pianoJobId === job.job_id}
+                                className="text-ink/50 hover:text-mustard hover:underline disabled:opacity-50"
+                              >
+                                {pianoJobId === job.job_id ? "Generating…" : "Generate Piano Version"}
+                              </button>
+                            ))}
+                        </div>
                       ) : (
                         <span className="text-ink/25">—</span>
                       )}
