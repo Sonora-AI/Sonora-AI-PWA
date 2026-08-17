@@ -42,6 +42,9 @@ export interface StatusResponse {
   piano_backing_status?: JobStatus | null;
   piano_backing_progress?: string;
   piano_backing_error?: string | null;
+  remix_status?: JobStatus | null;
+  remix_progress?: string;
+  remix_error?: string | null;
 }
 
 export interface JobSummary {
@@ -283,6 +286,23 @@ export async function remixCover(
     vocal_gain_db: params.vocalGainDb,
     backing_gain_db: params.backingGainDb,
     use_piano: params.usePiano,
+  });
+  return data;
+}
+
+export async function pollUntilRemixDone(
+  jobId: string,
+  opts: { intervalMs?: number; timeoutMs?: number; onStatus?: (status: StatusResponse) => void } = {},
+): Promise<StatusResponse> {
+  return pollUntil(jobId, (status) => status.remix_status === "done" || status.remix_status === "error", opts);
+}
+
+export async function remasterJob(
+  jobId: string,
+  correctionMix: number,
+): Promise<{ job_id: string; status: JobStatus }> {
+  const { data } = await client.post<{ job_id: string; status: JobStatus }>(`/remaster/${jobId}`, {
+    correction_mix: correctionMix,
   });
   return data;
 }

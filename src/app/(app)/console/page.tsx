@@ -17,6 +17,8 @@ import {
   confirmReview,
   submitPianoBacking,
   remixCover,
+  pollUntilRemixDone,
+  remasterJob,
   type NoteEdit,
   type ProcessingMode,
   type ReviewPayload,
@@ -67,6 +69,11 @@ export default function ConsolePage() {
   const [remixUsePiano, setRemixUsePiano] = useState(false);
   const [remixing, setRemixing] = useState(false);
   const [remixError, setRemixError] = useState<string | null>(null);
+  const [remixUrl, setRemixUrl] = useState<string | null>(null);
+
+  const [correctionMix, setCorrectionMix] = useState(0.8);
+  const [remastering, setRemastering] = useState(false);
+  const [remasterError, setRemasterError] = useState<string | null>(null);
 
   const needsReference = mode === "B" || mode === "COVER";
   const needsBacking = mode === "C";
@@ -100,6 +107,9 @@ export default function ConsolePage() {
     setRemixVocalGainDb(0);
     setRemixBackingGainDb(0);
     setRemixUsePiano(false);
+    setRemixUrl(null);
+    setCorrectionMix(0.8);
+    setRemasterError(null);
     try {
       const { job_id } = await submitJob(
         {
@@ -195,16 +205,35 @@ export default function ConsolePage() {
         backingGainDb: remixBackingGainDb,
         usePiano: remixUsePiano,
       });
-      const finalStatus = await pollUntilDone(jobId, { onStatus: setLastStatus });
-      if (finalStatus.status === "done") {
-        setResultUrl(await fetchResultBlobUrl(jobId));
+      const finalStatus = await pollUntilRemixDone(jobId);
+      if (finalStatus.remix_status === "done") {
+        setRemixUrl(await fetchStemBlobUrl(jobId, "remix"));
       } else {
-        setRemixError(finalStatus.error ?? "Remix failed");
+        setRemixError(finalStatus.remix_error ?? "Remix failed");
       }
     } catch (err) {
       setRemixError(err instanceof Error ? err.message : "Failed to apply remix");
     } finally {
       setRemixing(false);
+    }
+  };
+
+  const handleRemaster = async () => {
+    if (!jobId) return;
+    setRemastering(true);
+    setRemasterError(null);
+    try {
+      await remasterJob(jobId, correctionMix);
+      const finalStatus = await pollUntilDone(jobId, { onStatus: setLastStatus });
+      if (finalStatus.status === "done") {
+        setResultUrl(await fetchResultBlobUrl(jobId));
+      } else {
+        setRemasterError(finalStatus.error ?? "Re-render failed");
+      }
+    } catch (err) {
+      setRemasterError(err instanceof Error ? err.message : "Failed to re-render");
+    } finally {
+      setRemastering(false);
     }
   };
 
@@ -331,8 +360,45 @@ export default function ConsolePage() {
                 />
                 <p className="mt-1 text-[11px] text-ink/40">
                   Strips background hiss/room noise. Higher values remove more noise but can dull the vocal — 0
-                  disables it.
+                  disables it. This is a separate issue from a "robotic" sound below, which is the pitch
+                  correction itself, not noise.
                 </p>
+
+                {flowState === "done" && (
+                  <div className="mt-5 flex flex-col gap-3 border-t border-line pt-4">
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <span className="font-mono text-[10px] uppercase tracking-wider text-ink/45">
+                          Correction Strength
+                        </span>
+                        <span className="font-mono text-xs text-mustard">{correctionMix.toFixed(2)}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={correctionMix}
+                        onChange={(e) => setCorrectionMix(Number(e.target.value))}
+                        className="mt-2 w-full accent-mustard"
+                      />
+                      <p className="mt-1 text-[11px] text-ink/40">
+                        How much of the detected correction to actually apply — lower sounds closer to your
+                        original take (less robotic), higher snaps harder to pitch. This re-renders the vocal, so
+                        it takes a moment.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleRemaster}
+                      disabled={remastering}
+                      className="rounded-lg bg-gradient-mustard px-4 py-2 text-xs font-semibold uppercase tracking-wide text-white shadow-mustard transition disabled:cursor-not-allowed disabled:opacity-40 hover:enabled:brightness-110"
+                    >
+                      {remastering ? "Re-rendering..." : "Apply Correction Strength"}
+                    </button>
+                    {remasterError && <p className="text-xs text-red-500">{remasterError}</p>}
+                  </div>
+                )}
 
                 {isCover && flowState === "done" && (
                   <div className="mt-5 flex flex-col gap-4 border-t border-line pt-4">
@@ -521,6 +587,19 @@ export default function ConsolePage() {
                         {pianoError && <p className="mt-2 text-xs text-red-500">{pianoError}</p>}
                       </div>
                     )}
+                  </div>
+                )}
+
+                {isCover && flowState === "done" && (remixUrl || remixing) && (
+                  <div>
+                    <span className="mb-2 block font-mono text-xs uppercase tracking-wider text-ink/50">
+                      Remix Preview
+                    </span>
+                    <WaveformVisualizer url={remixUrl} label="Remix" downloadFileName="sonora-remix.wav" />
+                    <p className="mt-1 text-[11px] text-ink/40">
+                      Your offset/volume adjustments, previewed here — Output A above is untouched until you're
+                      happy with this and replace it manually.
+                    </p>
                   </div>
                 )}
               </div>
