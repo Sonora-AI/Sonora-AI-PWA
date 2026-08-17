@@ -8,6 +8,7 @@ import { PitchReviewCanvas } from "@/components/ui/PitchReviewCanvas";
 import { WaveformVisualizer } from "@/components/ui/WaveformVisualizer";
 import {
   submitJob,
+  submitSplit,
   pollUntil,
   pollUntilDone,
   pollUntilPianoBackingDone,
@@ -32,6 +33,7 @@ const MODE_TABS: { mode: ProcessingMode; label: string; description: string }[] 
   { mode: "B", label: "CONTOUR", description: "Follow a reference vocal's melodic contour." },
   { mode: "C", label: "RAGA", description: "Detect the backing track's scale, glide-aware." },
   { mode: "COVER", label: "COVER", description: "Cover a full song: align to it, correct, and mix over its instrumental." },
+  { mode: "SPLIT", label: "SPLIT", description: "Just separate vocals from instrumental — no pitch correction." },
 ];
 
 const emptySource: AudioSourceValue = { kind: "empty" };
@@ -72,12 +74,17 @@ export default function ConsolePage() {
   const [remixUrl, setRemixUrl] = useState<string | null>(null);
 
   const [correctionMix, setCorrectionMix] = useState(0.8);
+  const [micHogStrength, setMicHogStrength] = useState(0);
   const [remastering, setRemastering] = useState(false);
   const [remasterError, setRemasterError] = useState<string | null>(null);
+
+  const [splitVocalsUrl, setSplitVocalsUrl] = useState<string | null>(null);
+  const [splitInstrumentalUrl, setSplitInstrumentalUrl] = useState<string | null>(null);
 
   const needsReference = mode === "B" || mode === "COVER";
   const needsBacking = mode === "C";
   const isCover = mode === "COVER";
+  const isSplit = mode === "SPLIT";
 
   const hasVocal = vocalSource.kind !== "empty";
   const hasReference = referenceSource.kind !== "empty";
@@ -86,8 +93,8 @@ export default function ConsolePage() {
   const canSubmit =
     isAuthenticated &&
     hasVocal &&
-    (!needsReference || hasReference) &&
-    (!needsBacking || hasBacking) &&
+    (isSplit || (!needsReference || hasReference)) &&
+    (isSplit || (!needsBacking || hasBacking)) &&
     flowState !== "submitting" &&
     flowState !== "processing" &&
     flowState !== "reviewing";
@@ -109,8 +116,28 @@ export default function ConsolePage() {
     setRemixUsePiano(false);
     setRemixUrl(null);
     setCorrectionMix(0.8);
+    setMicHogStrength(0);
     setRemasterError(null);
+    setSplitVocalsUrl(null);
+    setSplitInstrumentalUrl(null);
     try {
+      if (isSplit) {
+        const { job_id } = await submitSplit(vocalSource.blob, setUploadProgress);
+        setJobId(job_id);
+        setFlowState("processing");
+        const status = await pollUntilDone(job_id, { onStatus: setLastStatus });
+        setLastStatus(status);
+        if (status.status === "done") {
+          setSplitVocalsUrl(await fetchStemBlobUrl(job_id, "vocals"));
+          setSplitInstrumentalUrl(await fetchStemBlobUrl(job_id, "instrumental"));
+          setFlowState("done");
+        } else {
+          setErrorMessage(status.error ?? "Separation failed");
+          setFlowState("error");
+        }
+        return;
+      }
+
       const { job_id } = await submitJob(
         {
           mode,
@@ -119,6 +146,7 @@ export default function ConsolePage() {
           extractInstrumental,
           enableReview,
           denoiseStrength,
+          micHogStrength,
           vocal: vocalSource.blob,
           reference: referenceSource.kind === "blob" ? referenceSource.blob : undefined,
           referenceYoutubeUrl: referenceSource.kind === "youtube" ? referenceSource.url : undefined,
@@ -223,7 +251,7 @@ export default function ConsolePage() {
     setRemastering(true);
     setRemasterError(null);
     try {
-      await remasterJob(jobId, correctionMix);
+      await remasterJob(jobId, correctionMix, micHogStrength);
       const finalStatus = await pollUntilDone(jobId, { onStatus: setLastStatus });
       if (finalStatus.status === "done") {
         setResultUrl(await fetchResultBlobUrl(jobId));
@@ -260,7 +288,7 @@ export default function ConsolePage() {
                 <span className="font-mono text-xs uppercase tracking-wider text-ink/50">Audio Ingestion</span>
                 <span className="font-mono text-[10px] uppercase tracking-wider text-ink/30">44.1kHz / 24-bit</span>
               </div>
-              <AudioSource label="Your vocal take" onChange={setVocalSource} />
+              <AudioSource label={isSplit ? "Song to split" : "Your vocal take"} onChange={setVocalSource} />
             </div>
 
             <div>
@@ -288,58 +316,63 @@ export default function ConsolePage() {
                   {MODE_TABS.find((tab) => tab.mode === mode)?.description}
                 </p>
 
-                <div className="mt-5 grid grid-cols-1 gap-x-6 gap-y-4 border-t border-line pt-4 font-mono text-xs min-[420px]:grid-cols-2">
-                  <div>
-                    <p className="text-ink/45">TUNING ROOT</p>
-                    <p className="mt-1 text-ink">A4 = 440.0 HZ</p>
-                  </div>
-                  <div>
-                    <p className="text-ink/45">TEMPERAMENT</p>
-                    <p className="mt-1 text-ink">{mode === "A" ? "EQUAL" : mode === "B" ? "CONTOUR" : "DETECTED"}</p>
-                  </div>
-                  <div>
-                    <p className="text-ink/45">DETECTION HOP</p>
-                    <p className="mt-1 text-ink">10MS (CREPE)</p>
-                  </div>
-                  <div>
-                    <p className="text-ink/45">RETUNE SPEED</p>
-                    <p className="mt-1 text-mustard">{retuneSpeed.toFixed(2)}</p>
-                  </div>
-                </div>
+                {!isSplit && (
+                  <>
+                    <div className="mt-5 grid grid-cols-1 gap-x-6 gap-y-4 border-t border-line pt-4 font-mono text-xs min-[420px]:grid-cols-2">
+                      <div>
+                        <p className="text-ink/45">TUNING ROOT</p>
+                        <p className="mt-1 text-ink">A4 = 440.0 HZ</p>
+                      </div>
+                      <div>
+                        <p className="text-ink/45">TEMPERAMENT</p>
+                        <p className="mt-1 text-ink">{mode === "A" ? "EQUAL" : mode === "B" ? "CONTOUR" : "DETECTED"}</p>
+                      </div>
+                      <div>
+                        <p className="text-ink/45">DETECTION HOP</p>
+                        <p className="mt-1 text-ink">10MS (CREPE)</p>
+                      </div>
+                      <div>
+                        <p className="text-ink/45">RETUNE SPEED</p>
+                        <p className="mt-1 text-mustard">{retuneSpeed.toFixed(2)}</p>
+                      </div>
+                    </div>
 
-                <input
-                  type="range"
-                  min={0.05}
-                  max={1}
-                  step={0.05}
-                  value={retuneSpeed}
-                  onChange={(e) => setRetuneSpeed(Number(e.target.value))}
-                  className="mt-3 w-full accent-mustard"
-                />
+                    <input
+                      type="range"
+                      min={0.05}
+                      max={1}
+                      step={0.05}
+                      value={retuneSpeed}
+                      onChange={(e) => setRetuneSpeed(Number(e.target.value))}
+                      className="mt-3 w-full accent-mustard"
+                    />
 
-                <div className="mt-4 flex items-center gap-2 border-t border-line pt-4">
-                  <span className="font-mono text-[10px] uppercase tracking-wider text-ink/45">Genre</span>
-                  <input
-                    type="text"
-                    value={genre}
-                    onChange={(e) => setGenre(e.target.value)}
-                    placeholder="pop"
-                    className="w-32 rounded-md border border-line bg-mist px-2 py-1 text-xs text-ink outline-none focus:border-mustard"
-                  />
-                </div>
+                    <div className="mt-4 flex items-center gap-2 border-t border-line pt-4">
+                      <span className="font-mono text-[10px] uppercase tracking-wider text-ink/45">Genre</span>
+                      <input
+                        type="text"
+                        value={genre}
+                        onChange={(e) => setGenre(e.target.value)}
+                        placeholder="pop"
+                        className="w-32 rounded-md border border-line bg-mist px-2 py-1 text-xs text-ink outline-none focus:border-mustard"
+                      />
+                    </div>
 
-                <label className="mt-4 flex items-center gap-2 border-t border-line pt-4 text-xs text-ink/50">
-                  <input
-                    type="checkbox"
-                    checked={enableReview}
-                    onChange={(e) => setEnableReview(e.target.checked)}
-                    className="accent-mustard"
-                  />
-                  Review detected notes before finalizing
-                </label>
+                    <label className="mt-4 flex items-center gap-2 border-t border-line pt-4 text-xs text-ink/50">
+                      <input
+                        type="checkbox"
+                        checked={enableReview}
+                        onChange={(e) => setEnableReview(e.target.checked)}
+                        className="accent-mustard"
+                      />
+                      Review detected notes before finalizing
+                    </label>
+                  </>
+                )}
               </div>
             </div>
 
+            {!isSplit && (
             <div>
               <span className="mb-2 block font-mono text-xs uppercase tracking-wider text-ink/50">Mastering</span>
               <div className="rounded-xl border border-line bg-white p-5 shadow-panel">
@@ -388,13 +421,35 @@ export default function ConsolePage() {
                         it takes a moment.
                       </p>
                     </div>
+
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <span className="font-mono text-[10px] uppercase tracking-wider text-ink/45">
+                          Mic Hog Effect
+                        </span>
+                        <span className="font-mono text-xs text-mustard">{micHogStrength.toFixed(2)}</span>
+                      </div>
+                      <input
+                        type="range"
+                        min={0}
+                        max={1}
+                        step={0.05}
+                        value={micHogStrength}
+                        onChange={(e) => setMicHogStrength(Number(e.target.value))}
+                        className="mt-2 w-full accent-mustard"
+                      />
+                      <p className="mt-1 text-[11px] text-ink/40">
+                        Boomy close-mic room/echo effect — 0 is off, higher is a more obvious slapback/booth sound.
+                      </p>
+                    </div>
+
                     <button
                       type="button"
                       onClick={handleRemaster}
                       disabled={remastering}
                       className="rounded-lg bg-gradient-mustard px-4 py-2 text-xs font-semibold uppercase tracking-wide text-white shadow-mustard transition disabled:cursor-not-allowed disabled:opacity-40 hover:enabled:brightness-110"
                     >
-                      {remastering ? "Re-rendering..." : "Apply Correction Strength"}
+                      {remastering ? "Re-rendering..." : "Apply Changes"}
                     </button>
                     {remasterError && <p className="text-xs text-red-500">{remasterError}</p>}
                   </div>
@@ -491,6 +546,7 @@ export default function ConsolePage() {
                 )}
               </div>
             </div>
+            )}
 
             {needsReference && (
               <AudioSource
@@ -555,6 +611,23 @@ export default function ConsolePage() {
           >
             {flowState === "reviewing" && reviewPayload ? (
               <PitchReviewCanvas payload={reviewPayload} onConfirm={handleConfirmReview} confirming={confirmingReview} />
+            ) : isSplit ? (
+              <div className="flex flex-col gap-4">
+                <div>
+                  <span className="mb-2 block font-mono text-xs uppercase tracking-wider text-ink/50">Vocals</span>
+                  <WaveformVisualizer url={splitVocalsUrl} label="Vocals" downloadFileName="sonora-vocals.wav" />
+                </div>
+                <div>
+                  <span className="mb-2 block font-mono text-xs uppercase tracking-wider text-ink/50">
+                    Instrumental
+                  </span>
+                  <WaveformVisualizer
+                    url={splitInstrumentalUrl}
+                    label="Instrumental"
+                    downloadFileName="sonora-instrumental.wav"
+                  />
+                </div>
+              </div>
             ) : (
               <div className="flex flex-col gap-4">
                 <div>

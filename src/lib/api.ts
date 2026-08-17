@@ -17,7 +17,7 @@ async function getTicket(scope: "upload" | "download", jobId?: string): Promise<
   return data.ticket;
 }
 
-export type ProcessingMode = "A" | "B" | "C" | "COVER";
+export type ProcessingMode = "A" | "B" | "C" | "COVER" | "SPLIT";
 export type JobStatus = "pending" | "processing" | "awaiting_review" | "done" | "error";
 
 export interface ProcessResponse {
@@ -67,6 +67,7 @@ export interface ProcessParams {
   extractInstrumental?: boolean;
   enableReview?: boolean;
   denoiseStrength?: number;
+  micHogStrength?: number;
 }
 
 export interface RemixParams {
@@ -138,6 +139,7 @@ export async function submitJob(
   form.append("extract_instrumental", String(Boolean(params.extractInstrumental)));
   form.append("enable_review", String(Boolean(params.enableReview)));
   if (params.denoiseStrength !== undefined) form.append("denoise_strength", String(params.denoiseStrength));
+  if (params.micHogStrength !== undefined) form.append("mic_hog_strength", String(params.micHogStrength));
   form.append("vocal", params.vocal, "vocal.webm");
   if (params.reference) form.append("reference", params.reference, "reference.webm");
   if (params.referenceYoutubeUrl) form.append("reference_youtube_url", params.referenceYoutubeUrl);
@@ -171,6 +173,38 @@ export async function submitJob(
       throw new Error(`Upload failed (${result.status}): ${result.body}`);
     }
     // 5xx -- treat as transient and retry.
+    if (isLastAttempt) throw new Error(`Upload failed (${result.status}): ${result.body}`);
+    onProgress?.(0);
+    await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+  }
+  throw new Error("Upload failed after retries");
+}
+
+export async function submitSplit(audio: Blob, onProgress?: (fraction: number) => void): Promise<ProcessResponse> {
+  const form = new FormData();
+  form.append("audio", audio, "audio.webm");
+
+  for (let attempt = 1; attempt <= MAX_UPLOAD_ATTEMPTS; attempt++) {
+    const ticket = await getTicket("upload");
+    const isLastAttempt = attempt === MAX_UPLOAD_ATTEMPTS;
+
+    let result: { status: number; body: string };
+    try {
+      result = await uploadWithProgress(`${BACKEND_URL}/api/v1/split`, form, ticket, {
+        timeoutMs: UPLOAD_TIMEOUT_MS,
+        onProgress,
+      });
+    } catch (err) {
+      if (isLastAttempt) throw err;
+      onProgress?.(0);
+      await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
+      continue;
+    }
+
+    if (result.status >= 200 && result.status < 300) return JSON.parse(result.body) as ProcessResponse;
+    if (result.status >= 400 && result.status < 500) {
+      throw new Error(`Upload failed (${result.status}): ${result.body}`);
+    }
     if (isLastAttempt) throw new Error(`Upload failed (${result.status}): ${result.body}`);
     onProgress?.(0);
     await new Promise((resolve) => setTimeout(resolve, 1000 * attempt));
@@ -300,9 +334,11 @@ export async function pollUntilRemixDone(
 export async function remasterJob(
   jobId: string,
   correctionMix: number,
+  micHogStrength: number,
 ): Promise<{ job_id: string; status: JobStatus }> {
   const { data } = await client.post<{ job_id: string; status: JobStatus }>(`/remaster/${jobId}`, {
     correction_mix: correctionMix,
+    mic_hog_strength: micHogStrength,
   });
   return data;
 }
