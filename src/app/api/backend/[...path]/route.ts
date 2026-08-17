@@ -9,9 +9,14 @@ import { getSession } from "@/lib/session";
 // anyway) is fine.
 const BACKEND_URL = process.env.BACKEND_URL ?? "http://localhost:8000";
 
+// Local-dev-only escape hatch -- see the backend's app/core/auth.py for the
+// matching bypass. Only ever set DISABLE_AUTH in a local .env.local that
+// never leaves this machine; it must never be set on Vercel.
+const DISABLE_AUTH = process.env.DISABLE_AUTH === "true";
+
 async function proxy(request: NextRequest, path: string[]): Promise<NextResponse> {
-  const session = await getSession();
-  if (!session) {
+  const session = DISABLE_AUTH ? null : await getSession();
+  if (!DISABLE_AUTH && !session) {
     return NextResponse.json({ detail: "Not authenticated" }, { status: 401 });
   }
 
@@ -20,7 +25,7 @@ async function proxy(request: NextRequest, path: string[]): Promise<NextResponse
   const headers = new Headers();
   const contentType = request.headers.get("content-type");
   if (contentType) headers.set("content-type", contentType);
-  headers.set("authorization", `Bearer ${session.access_token}`);
+  headers.set("authorization", `Bearer ${session?.access_token ?? "local-dev"}`);
 
   const backendRes = await fetch(targetUrl, {
     method: request.method,
